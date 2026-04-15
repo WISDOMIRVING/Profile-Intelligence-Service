@@ -1,0 +1,17 @@
+{
+  "name": "profile-intelligence-service",
+  "version": "1.0.0",
+  "description": "A Profile Intelligence Service that enriches names using external APIs and stores structured profile data",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "sql.js": "^1.11.0",
+    "uuid": "^10.0.0"
+  }
+}
