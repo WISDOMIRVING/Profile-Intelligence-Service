@@ -17,9 +17,14 @@ A RESTful API service that enriches names with demographic intelligence by integ
 |-----------|-----------|
 | Runtime | Node.js |
 | Framework | Express.js |
-| Database | SQLite (via better-sqlite3) |
+| Database | SQLite (via sql.js) |
 | HTTP Client | Axios |
 | IDs | UUID v7 |
+
+## Deployment
+
+- **Live URL**: [https://profile-intelligence-service-production.up.railway.app/](https://profile-intelligence-service-production.up.railway.app/)
+- **GitHub Repository**: [https://github.com/WISDOMIRVING/Profile-Intelligence-Service](https://github.com/WISDOMIRVING/Profile-Intelligence-Service)
 
 ## Getting Started
 
@@ -30,7 +35,7 @@ A RESTful API service that enriches names with demographic intelligence by integ
 ### Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Profile-Intelligence-Service.git
+git clone https://github.com/WISDOMIRVING/Profile-Intelligence-Service.git
 cd Profile-Intelligence-Service
 npm install
 ```
