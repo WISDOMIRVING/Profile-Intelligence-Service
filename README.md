@@ -1,15 +1,15 @@
-# Profile Intelligence Service
+# Queryable Intelligence Engine (Profile Service)
 
-A RESTful API service that enriches names with demographic intelligence by integrating multiple external APIs. Given a name, the service predicts gender, age, and nationality, then stores the structured result for future retrieval.
+Upgrade your demographic intelligence system into a production-ready Queryable Intelligence Engine. This service collects, seeds, and exposes deep search capabilities for over 2,000 user profiles.
 
 ## Features
 
-- **Multi-API Enrichment** — Aggregates data from Genderize, Agify, and Nationalize APIs
-- **Data Persistence** — SQLite-backed storage with structured schema
-- **Idempotency** — Duplicate name submissions return existing records without re-creation
-- **Filtering** — Case-insensitive query filters on gender, country, and age group
-- **UUID v7 IDs** — Time-ordered unique identifiers
-- **Consistent Error Handling** — Structured JSON error responses with appropriate HTTP status codes
+- **Advanced Filtering** — Combine gender, age, country, and probability scores in a single query.
+- **Natural Language Query (NLQ)** — Search using plain English like *"young males from nigeria"*.
+- **Data Seeding** — Automatically populates 2,026 records from an external source.
+- **Sorting & Pagination** — Efficiently handle large datasets with custom page limits and sorting.
+- **UUID v7 IDs** — Time-ordered unique identifiers for optimal database indexing.
+- **CORS Enabled** — Ready for integration with any frontend application.
 
 ## Tech Stack
 
@@ -18,19 +18,10 @@ A RESTful API service that enriches names with demographic intelligence by integ
 | Runtime | Node.js |
 | Framework | Express.js |
 | Database | SQLite (via sql.js) |
-| HTTP Client | Axios |
 | IDs | UUID v7 |
-
-## Deployment
-
-- **Live URL**: [https://profile-intelligence-service-production.up.railway.app/](https://profile-intelligence-service-production.up.railway.app/)
-- **GitHub Repository**: [https://github.com/WISDOMIRVING/Profile-Intelligence-Service](https://github.com/WISDOMIRVING/Profile-Intelligence-Service)
+| API Integration | Axios (for seeding & enrichment) |
 
 ## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
 
 ### Installation
 
@@ -43,128 +34,103 @@ npm install
 ### Run Locally
 
 ```bash
-# Development (with auto-reload)
 npm run dev
-
-# Production
-npm start
 ```
 
-The server starts on `http://localhost:3000` by default. Set the `PORT` environment variable to change this.
+The database will automatically seed with 2,026 profiles on first start.
 
 ## API Endpoints
 
-### 1. Create Profile
+### 1. Advanced Profile List
+Returns a paginated list of profiles with optional filters and sorting.
+
+```
+GET /api/profiles?gender=male&country_id=NG&min_age=25&sort_by=age&order=desc
+```
+
+**Parameters:**
+- `gender`: male | female
+- `age_group`: child | teenager | adult | senior
+- `country_id`: ISO code (e.g., NG)
+- `min_age` / `max_age`: Numeric range
+- `min_gender_probability` / `min_country_probability`: Confidence thresholds
+- `sort_by`: age | created_at | gender_probability
+- `order`: asc | desc
+- `page` (default 1), `limit` (default 10, max 50)
+
+### 2. Natural Language Search
+Interpret plain English queries into structured filters.
+
+```
+GET /api/profiles/search?q=young males from nigeria
+```
+
+**Supported Patterns:**
+- `"young"` (maps to ages 16–24)
+- `"males"` / `"females"`
+- `"above 30"` (min_age=30)
+- `"teenagers"` / `"adult"` / `"senior"`
+- `"from [country]"` (detects major country names)
+
+### 3. Create Profile (Idempotent)
+Enriches a name using demographic APIs.
 
 ```
 POST /api/profiles
-Content-Type: application/json
-
 { "name": "ella" }
 ```
 
-**Response (201 Created):**
-```json
-{
-  "status": "success",
-  "data": {
-    "id": "019...",
-    "name": "ella",
-    "gender": "female",
-    "gender_probability": 0.99,
-    "sample_size": 1234,
-    "age": 46,
-    "age_group": "adult",
-    "country_id": "DRC",
-    "country_probability": 0.85,
-    "created_at": "2026-04-01T12:00:00Z"
-  }
-}
-```
-
-If the name already exists, returns `200` with `"message": "Profile already exists"`.
-
-### 2. Get Profile by ID
-
-```
-GET /api/profiles/:id
-```
-
-**Response (200 OK):**
-```json
-{
-  "status": "success",
-  "data": { "...profile..." }
-}
-```
-
-### 3. List Profiles (with optional filters)
-
-```
-GET /api/profiles?gender=male&country_id=NG&age_group=adult
-```
-
-All filters are **case-insensitive** and optional.
-
-**Response (200 OK):**
-```json
-{
-  "status": "success",
-  "count": 2,
-  "data": [ "...profiles..." ]
-}
-```
-
 ### 4. Delete Profile
-
 ```
 DELETE /api/profiles/:id
 ```
 
-**Response:** `204 No Content`
+## Response Formats
 
-## Error Responses
-
-All errors follow this structure:
-
+### Success Response
 ```json
 {
-  "status": "error",
-  "message": "Description of what went wrong"
+  "status": "success",
+  "page": 1,
+  "limit": 10,
+  "total": 2026,
+  "data": [
+    {
+      "id": "019...",
+      "name": "ella",
+      "gender": "female",
+      "gender_probability": 0.99,
+      "age": 46,
+      "age_group": "adult",
+      "country_id": "CD",
+      "country_name": "Congo",
+      "country_probability": 0.85,
+      "created_at": "2026-04-21T12:00:00Z"
+    }
+  ]
 }
 ```
 
-| Status | Meaning |
-|--------|---------|
-| 400 | Missing or empty name |
-| 404 | Profile not found |
-| 422 | Invalid type (name must be a string) |
-| 502 | External API returned invalid data |
-| 500 | Internal server error |
-
-## External APIs Used
-
-| API | Purpose | URL |
-|-----|---------|-----|
-| Genderize | Gender prediction | https://api.genderize.io |
-| Agify | Age prediction | https://api.agify.io |
-| Nationalize | Nationality prediction | https://api.nationalize.io |
+### Error Response
+```json
+{
+  "status": "error",
+  "message": "Invalid query parameters"
+}
+```
 
 ## Project Structure
 
 ```
 ├── index.js                 # App entry point
-├── db.js                    # Database initialization & schema
+├── db.js                    # DB schema & automated seeding
 ├── routes/
-│   └── profiles.js          # All profile endpoints
+│   └── profiles.js          # Advanced Filtering & NLQ Logic
 ├── services/
-│   └── enrichment.js        # External API integration
+│   └── enrichment.js        # Demographic classification
 ├── middleware/
-│   └── validation.js        # Request validation
-├── package.json
-└── README.md
+│   └── validation.js        # Input validation
 ```
 
 ## License
-
 MIT

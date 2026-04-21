@@ -7,12 +7,10 @@ const { validateCreateProfile } = require('../middleware/validation');
 
 /**
  * Helper: Runs a sql.js SELECT query and returns an array of row objects.
- * sql.js returns rows as arrays of values — this converts them to { col: val } objects.
  */
 function queryAll(db, sql, params = []) {
   const stmt = db.prepare(sql);
   stmt.bind(params);
-
   const results = [];
   while (stmt.step()) {
     results.push(stmt.getAsObject());
@@ -31,16 +29,13 @@ function queryOne(db, sql, params = []) {
 
 /**
  * POST /api/profiles
- * Creates a new profile by enriching the given name via external APIs.
- * Idempotent: returns existing profile if name already exists.
  */
 router.post('/', validateCreateProfile, async (req, res) => {
   try {
-    const name = req.body.name.trim().toLowerCase();
+    const name = req.body.name.trim();
     const db = getDatabase();
 
-    // Idempotency check — return existing profile if name already stored
-    const existing = queryOne(db, 'SELECT * FROM profiles WHERE name = ?', [name]);
+    const existing = queryOne(db, 'SELECT * FROM profiles WHERE name = ? COLLATE NOCASE', [name]);
     if (existing) {
       return res.status(200).json({
         status: 'success',
@@ -49,41 +44,30 @@ router.post('/', validateCreateProfile, async (req, res) => {
       });
     }
 
-    // Enrich the name using external APIs
     const enriched = await enrichProfile(name);
 
-    // Build profile object
     const profile = {
       id: uuidv7(),
       name,
       gender: enriched.gender,
       gender_probability: enriched.gender_probability,
-      sample_size: enriched.sample_size,
       age: enriched.age,
       age_group: enriched.age_group,
       country_id: enriched.country_id,
+      country_name: enriched.country_name,
       country_probability: enriched.country_probability,
-      created_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+      created_at: new Date().toISOString()
     };
 
-    // Persist to database
     db.run(`
-      INSERT INTO profiles (id, name, gender, gender_probability, sample_size, age, age_group, country_id, country_probability, created_at)
+      INSERT INTO profiles (id, name, gender, gender_probability, age, age_group, country_id, country_name, country_probability, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      profile.id,
-      profile.name,
-      profile.gender,
-      profile.gender_probability,
-      profile.sample_size,
-      profile.age,
-      profile.age_group,
-      profile.country_id,
-      profile.country_probability,
-      profile.created_at
+      profile.id, profile.name, profile.gender, profile.gender_probability,
+      profile.age, profile.age_group, profile.country_id, profile.country_name,
+      profile.country_probability, profile.created_at
     ]);
 
-    // Save to disk
     saveDatabase();
 
     return res.status(201).json({
@@ -100,49 +84,170 @@ router.post('/', validateCreateProfile, async (req, res) => {
 });
 
 /**
- * GET /api/profiles
- * Returns all profiles, with optional case-insensitive filters:
- * ?gender=male&country_id=NG&age_group=adult
+ * Core handler for GET /api/profiles
  */
-router.get('/', (req, res) => {
+function getProfilesHandler(req, res) {
   try {
     const db = getDatabase();
-    const { gender, country_id, age_group } = req.query;
+    let { 
+      gender, age_group, country_id, 
+      min_age, max_age, 
+      min_gender_probability, min_country_probability,
+      sort_by, order,
+      page = 1, limit = 10
+    } = req.query;
 
-    let query = 'SELECT id, name, gender, age, age_group, country_id FROM profiles WHERE 1=1';
+    page = parseInt(page);
+    limit = parseInt(limit);
+
+    if (isNaN(page) || page < 1 || isNaN(limit) || limit < 1 || limit > 50) {
+      return res.status(400).json({ status: 'error', message: 'Invalid query parameters' });
+    }
+
+    let whereClause = '1=1';
     const params = [];
 
     if (gender) {
-      query += ' AND LOWER(gender) = LOWER(?)';
-      params.push(gender);
+      whereClause += ' AND gender = ?';
+      params.push(gender.toLowerCase());
     }
-
-    if (country_id) {
-      query += ' AND LOWER(country_id) = LOWER(?)';
-      params.push(country_id);
-    }
-
     if (age_group) {
-      query += ' AND LOWER(age_group) = LOWER(?)';
-      params.push(age_group);
+      whereClause += ' AND age_group = ?';
+      params.push(age_group.toLowerCase());
+    }
+    if (country_id) {
+      whereClause += ' AND country_id = ?';
+      params.push(country_id.toUpperCase());
+    }
+    if (min_age) {
+      whereClause += ' AND age >= ?';
+      params.push(parseInt(min_age));
+    }
+    if (max_age) {
+      whereClause += ' AND age <= ?';
+      params.push(parseInt(max_age));
+    }
+    if (min_gender_probability) {
+      whereClause += ' AND gender_probability >= ?';
+      params.push(parseFloat(min_gender_probability));
+    }
+    if (min_country_probability) {
+      whereClause += ' AND country_probability >= ?';
+      params.push(parseFloat(min_country_probability));
     }
 
-    const profiles = queryAll(db, query, params);
+    // Total count
+    const countRes = queryOne(db, `SELECT COUNT(*) as total FROM profiles WHERE ${whereClause}`, params);
+    const total = countRes.total;
+
+    // Sorting
+    const validSortFields = ['age', 'created_at', 'gender_probability'];
+    const validOrders = ['asc', 'desc'];
+    sort_by = validSortFields.includes(sort_by) ? sort_by : 'created_at';
+    order = validOrders.includes(order?.toLowerCase()) ? order.toLowerCase() : 'desc';
+
+    // Pagination
+    const offset = (page - 1) * limit;
+    const profiles = queryAll(db, `
+      SELECT * FROM profiles 
+      WHERE ${whereClause} 
+      ORDER BY ${sort_by} ${order} 
+      LIMIT ? OFFSET ?
+    `, [...params, limit, offset]);
 
     return res.status(200).json({
       status: 'success',
-      count: profiles.length,
+      page,
+      limit,
+      total,
       data: profiles
     });
   } catch (err) {
-    console.error('GET /api/profiles error:', err);
+    console.error('getProfilesHandler error:', err);
+    return res.status(500).json({ status: 'error', message: 'Internal server error' });
+  }
+}
+
+/**
+ * GET /api/profiles
+ */
+router.get('/', (req, res) => getProfilesHandler(req, res));
+
+/**
+ * Natural Language Query Parser Helper
+ */
+function parseNLQ(query) {
+  const q = query.toLowerCase();
+  const filters = {};
+
+  if (q.includes('young')) {
+    filters.min_age = 16;
+    filters.max_age = 24;
+  }
+  if (q.includes('male') && q.includes('female')) {
+    // No gender restriction if both mentioned
+  } else if (q.includes('male')) {
+    filters.gender = 'male';
+  } else if (q.includes('female')) {
+    filters.gender = 'female';
+  }
+  
+  if (q.includes('teenager')) filters.age_group = 'teenager';
+  if (q.includes('adult')) filters.age_group = 'adult';
+  if (q.includes('senior')) filters.age_group = 'senior';
+
+  const aboveMatch = q.match(/above (\d+)/);
+  if (aboveMatch) {
+    filters.min_age = parseInt(aboveMatch[1]);
+  }
+
+  // Common countries mapping for NLQ (can be expanded)
+  const countries = {
+    'nigeria': 'NG',
+    'angola': 'AO',
+    'kenya': 'KE',
+    'benin': 'BJ',
+    'ghana': 'GH',
+    'south africa': 'ZA'
+  };
+  
+  for (const [name, id] of Object.entries(countries)) {
+    if (q.includes(name)) {
+      filters.country_id = id;
+      break;
+    }
+  }
+
+  return Object.keys(filters).length > 0 ? filters : null;
+}
+
+/**
+ * GET /api/profiles/search
+ * Natural Language Query
+ */
+router.get('/search', (req, res) => {
+  try {
+    const { q, page = 1, limit = 10 } = req.query;
+    if (!q) {
+      return res.status(400).json({ status: 'error', message: 'Missing or empty parameter' });
+    }
+
+    const filters = parseNLQ(q);
+    if (!filters) {
+      return res.status(400).json({ status: 'error', message: 'Unable to interpret query' });
+    }
+
+    // Reuse core handler
+    req.query = { ...req.query, ...filters };
+    return getProfilesHandler(req, res);
+  } catch (err) {
+    console.error('GET /api/profiles/search error:', err);
     return res.status(500).json({ status: 'error', message: 'Internal server error' });
   }
 });
 
 /**
  * GET /api/profiles/:id
- * Returns a single profile by its UUID.
  */
 router.get('/:id', (req, res) => {
   try {
@@ -153,10 +258,7 @@ router.get('/:id', (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Profile not found' });
     }
 
-    return res.status(200).json({
-      status: 'success',
-      data: profile
-    });
+    return res.status(200).json({ status: 'success', data: profile });
   } catch (err) {
     console.error('GET /api/profiles/:id error:', err);
     return res.status(500).json({ status: 'error', message: 'Internal server error' });
@@ -165,21 +267,16 @@ router.get('/:id', (req, res) => {
 
 /**
  * DELETE /api/profiles/:id
- * Deletes a profile by its UUID. Returns 204 on success.
  */
 router.delete('/:id', (req, res) => {
   try {
     const db = getDatabase();
-
-    // Check if profile exists first
     const profile = queryOne(db, 'SELECT id FROM profiles WHERE id = ?', [req.params.id]);
     if (!profile) {
       return res.status(404).json({ status: 'error', message: 'Profile not found' });
     }
-
     db.run('DELETE FROM profiles WHERE id = ?', [req.params.id]);
     saveDatabase();
-
     return res.sendStatus(204);
   } catch (err) {
     console.error('DELETE /api/profiles/:id error:', err);

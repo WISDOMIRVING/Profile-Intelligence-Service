@@ -1,9 +1,30 @@
 const axios = require('axios');
 
+// Simplified mapping for common countries. In a real app, use i18n-iso-countries.
+const COUNTRY_MAP = {
+  'NG': 'Nigeria',
+  'BJ': 'Benin',
+  'KE': 'Kenya',
+  'AO': 'Angola',
+  'GH': 'Ghana',
+  'ZA': 'South Africa',
+  'EG': 'Egypt',
+  'MA': 'Morocco',
+  'SN': 'Senegal',
+  'CI': 'Ivory Coast',
+  'US': 'United States',
+  'GB': 'United Kingdom',
+  'FR': 'France',
+  'DE': 'Germany',
+  'CN': 'China',
+  'IN': 'India',
+  'BR': 'Brazil',
+  'CA': 'Canada',
+  'AU': 'Australia'
+};
+
 /**
  * Classifies an age into a human-readable age group.
- * @param {number} age
- * @returns {string} One of: child, teenager, adult, senior
  */
 function classifyAgeGroup(age) {
   if (age >= 0 && age <= 12) return 'child';
@@ -13,17 +34,11 @@ function classifyAgeGroup(age) {
 }
 
 /**
- * Calls Genderize, Agify, and Nationalize APIs in parallel for the given name.
- * Validates each response and returns a processed, aggregated result.
- *
- * @param {string} name - The name to enrich
- * @returns {Object} Enriched profile data
- * @throws {{ status: number, message: string }} On invalid API responses (502)
+ * Calls external APIs to enrich a name.
  */
 async function enrichProfile(name) {
   const encodedName = encodeURIComponent(name);
 
-  // Call all three APIs in parallel
   let genderRes, ageRes, nationRes;
   try {
     [genderRes, ageRes, nationRes] = await Promise.all([
@@ -32,15 +47,6 @@ async function enrichProfile(name) {
       axios.get(`https://api.nationalize.io?name=${encodedName}`)
     ]);
   } catch (err) {
-    // Determine which API failed based on the URL
-    const failedUrl = err.config?.url || '';
-    if (failedUrl.includes('genderize')) {
-      throw { status: 502, message: 'Genderize returned an invalid response' };
-    } else if (failedUrl.includes('agify')) {
-      throw { status: 502, message: 'Agify returned an invalid response' };
-    } else if (failedUrl.includes('nationalize')) {
-      throw { status: 502, message: 'Nationalize returned an invalid response' };
-    }
     throw { status: 502, message: 'External API returned an invalid response' };
   }
 
@@ -48,22 +54,18 @@ async function enrichProfile(name) {
   const ageData = ageRes.data;
   const nationData = nationRes.data;
 
-  // Validate Genderize response
   if (!genderData.gender || genderData.count === 0) {
     throw { status: 502, message: 'Genderize returned an invalid response' };
   }
 
-  // Validate Agify response
   if (ageData.age === null || ageData.age === undefined) {
     throw { status: 502, message: 'Agify returned an invalid response' };
   }
 
-  // Validate Nationalize response
   if (!nationData.country || nationData.country.length === 0) {
     throw { status: 502, message: 'Nationalize returned an invalid response' };
   }
 
-  // Pick the country with the highest probability
   const topCountry = nationData.country.reduce((prev, curr) =>
     curr.probability > prev.probability ? curr : prev
   );
@@ -71,10 +73,10 @@ async function enrichProfile(name) {
   return {
     gender: genderData.gender,
     gender_probability: genderData.probability,
-    sample_size: genderData.count,
     age: ageData.age,
     age_group: classifyAgeGroup(ageData.age),
     country_id: topCountry.country_id,
+    country_name: COUNTRY_MAP[topCountry.country_id] || topCountry.country_id,
     country_probability: topCountry.probability
   };
 }
