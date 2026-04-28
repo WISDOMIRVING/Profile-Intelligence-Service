@@ -33,7 +33,7 @@ const apiLimiter = rateLimit({
 
 // ─── Middleware ────────────────────────────────────────────
 app.use(cors({
-  origin: process.env.WEB_URL || 'http://localhost:3005',
+  origin: process.env.WEB_URL || 'https://insighta-web-phi.vercel.app',
   credentials: true
 }));
 app.use(express.json());
