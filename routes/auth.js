@@ -12,8 +12,11 @@ const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || 'dummy_client_s
 const WEB_URL = process.env.WEB_URL || 'https://insighta-web-phi.vercel.app';
 
 // Generate access token (3 minutes)
-function generateAccessToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '3m' });
+function generateAccessToken(user) {
+  return jwt.sign({ 
+    userId: user.id,
+    role: user.role 
+  }, JWT_SECRET, { expiresIn: '3m' });
 }
 
 // Generate refresh token (5 minutes)
@@ -97,7 +100,7 @@ router.get('/github/callback', async (req, res) => {
         username: githubUser.login,
         email: primaryEmail,
         avatar_url: githubUser.avatar_url,
-        role: 'analyst', // Default role
+        role: (db.prepare('SELECT COUNT(*) as count FROM users').get().count === 0 || githubUser.login === process.env.ADMIN_USERNAME) ? 'admin' : 'analyst',
         is_active: 1,
         last_login_at: now,
         created_at: now
@@ -109,7 +112,7 @@ router.get('/github/callback', async (req, res) => {
     saveDatabase();
 
     // 4. Issue Tokens
-    const accessToken = generateAccessToken(user.id);
+    const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user.id);
 
     // Set Cookies for Web
@@ -181,8 +184,15 @@ router.post('/refresh', (req, res) => {
   db.run('DELETE FROM refresh_tokens WHERE token = ?', [refreshToken]);
   
   // Issue new pair
-  const newAccessToken = generateAccessToken(storedToken.user_id);
-  const newRefreshToken = generateRefreshToken(storedToken.user_id);
+  const db_refresh = getDatabase();
+  const user = db_refresh.prepare('SELECT * FROM users WHERE id = ?').get([storedToken.user_id]);
+  
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'User not found' });
+  }
+
+  const newAccessToken = generateAccessToken(user);
+  const newRefreshToken = generateRefreshToken(user.id);
 
   // Set Cookies for Web
   res.cookie('access_token', newAccessToken, {

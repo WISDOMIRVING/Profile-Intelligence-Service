@@ -39,6 +39,15 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+// API Versioning Middleware
+app.use('/api', (req, res, next) => {
+  const version = req.headers['x-api-version'];
+  if (version !== '1') {
+    return res.status(400).json({ status: 'error', message: 'Invalid or missing X-API-Version header. Expected version: 1' });
+  }
+  next();
+});
+
 // Custom Morgan Logging Format (Method, Endpoint, Status code, Response time)
 app.use(morgan(':method :url :status :response-time ms'));
 
@@ -66,6 +75,12 @@ app.use('/auth', authLimiter, authRoutes);
 
 // Protect ALL /api/* routes
 app.use('/api/', authenticate, apiLimiter);
+
+// User Management
+app.get('/api/users/me', (req, res) => {
+  res.json({ status: 'success', data: req.user });
+});
+
 app.use('/api/profiles', profileRoutes);
 
 // ─── 404 catch-all ────────────────────────────────────────

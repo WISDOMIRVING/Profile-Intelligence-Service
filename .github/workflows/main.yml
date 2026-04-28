@@ -1,0 +1,35 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        
+    - name: Install Backend Dependencies
+      run: npm install
+      
+    - name: Install Frontend Dependencies
+      run: |
+        cd insighta-web
+        npm install
+        
+    - name: Lint Backend
+      run: npm run lint || true # Allow failure for now if not configured
+      
+    - name: Build Frontend
+      run: |
+        cd insighta-web
+        npm run build
