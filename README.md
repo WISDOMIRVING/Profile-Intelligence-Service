@@ -15,7 +15,7 @@ The database is an in-memory SQLite database (`sql.js`) that persists to disk (`
 
 We implemented a robust GitHub OAuth flow supporting both CLI and Web clients:
 1. **Web Portal**: Users visit `/auth/github` which redirects to GitHub. After granting permission, GitHub redirects to `/auth/github/callback`. The backend retrieves the user profile, creates/updates the user record, and issues Access (3m) and Refresh (5m) tokens as **HTTP-only cookies**. The browser is then redirected to the web dashboard.
-2. **CLI Tool**: The CLI initiates a PKCE flow and opens the browser. After the local server captures the GitHub callback, the CLI sends the `code` and `code_verifier` directly to the backend's `/auth/github/callback` endpoint. The backend exchanges these credentials and responds with JSON containing the tokens, which the CLI stores locally.
+2. **CLI Tool**: The CLI initiates a PKCE flow and opens the browser. After the local server at http://localhost:3005 captures the GitHub callback, the CLI sends the `code` and `code_verifier` directly to the backend's `/auth/github/callback` endpoint. The backend exchanges these credentials and responds with JSON containing the tokens, which the CLI stores locally.
 
 ## Token Handling Approach
 

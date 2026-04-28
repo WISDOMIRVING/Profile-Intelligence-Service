@@ -9,7 +9,7 @@ const { JWT_SECRET, authenticate } = require('../middleware/auth');
 
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'dummy_client_id';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || 'dummy_client_secret';
-const WEB_URL = process.env.WEB_URL || 'http://localhost:3001';
+const WEB_URL = process.env.WEB_URL || 'http://localhost:3005';
 
 // Generate access token (3 minutes)
 function generateAccessToken(userId) {

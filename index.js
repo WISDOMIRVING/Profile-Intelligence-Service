@@ -33,7 +33,7 @@ const apiLimiter = rateLimit({
 
 // ─── Middleware ────────────────────────────────────────────
 app.use(cors({
-  origin: process.env.WEB_URL || 'http://localhost:3001',
+  origin: process.env.WEB_URL || 'http://localhost:3005',
   credentials: true
 }));
 app.use(express.json());
