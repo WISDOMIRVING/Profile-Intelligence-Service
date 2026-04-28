@@ -28,7 +28,9 @@ function generateRefreshToken(userId) {
 
 // GET /auth/github - Redirect to GitHub for Web
 router.get('/github', (req, res) => {
-  const redirectUri = `${req.protocol}://${req.get('host')}/auth/github/callback`;
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  const host = req.get('host');
+  const redirectUri = `${protocol}://${host}/auth/github/callback`;
   const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${redirectUri}&scope=user:email`;
   res.redirect(githubAuthUrl);
 });
