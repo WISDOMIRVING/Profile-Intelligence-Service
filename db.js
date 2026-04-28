@@ -54,6 +54,29 @@ async function initializeDatabase() {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      github_id TEXT UNIQUE NOT NULL,
+      username TEXT NOT NULL,
+      email TEXT,
+      avatar_url TEXT,
+      role TEXT NOT NULL DEFAULT 'analyst',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_login_at TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Seed database
   await seedDatabase();
 

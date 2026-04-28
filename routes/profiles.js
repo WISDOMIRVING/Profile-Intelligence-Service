@@ -4,6 +4,11 @@ const { v7: uuidv7 } = require('uuid');
 const { getDatabase, saveDatabase } = require('../db');
 const { enrichProfile } = require('../services/enrichment');
 const { validateCreateProfile } = require('../middleware/validation');
+const { requireRole, requireApiVersion } = require('../middleware/auth');
+const { Parser } = require('json2csv');
+
+router.use(requireApiVersion);
+
 
 /**
  * Helper: Runs a sql.js SELECT query and returns an array of row objects.
@@ -30,7 +35,7 @@ function queryOne(db, sql, params = []) {
 /**
  * POST /api/profiles
  */
-router.post('/', validateCreateProfile, async (req, res) => {
+router.post('/', requireRole('admin'), validateCreateProfile, async (req, res) => {
   try {
     const name = req.body.name.trim();
     const db = getDatabase();
@@ -84,18 +89,95 @@ router.post('/', validateCreateProfile, async (req, res) => {
 });
 
 /**
+ * Helper: Builds WHERE clause and sorting for profile queries
+ */
+function buildProfilesQuery(queryOptions) {
+  let { 
+    gender, age_group, country_id, 
+    min_age, max_age, 
+    min_gender_probability, min_country_probability,
+    sort_by, order
+  } = queryOptions;
+
+  let whereClause = '1=1';
+  const params = [];
+
+  if (gender) {
+    whereClause += ' AND gender = ?';
+    params.push(gender.toLowerCase());
+  }
+  if (age_group) {
+    whereClause += ' AND age_group = ?';
+    params.push(age_group.toLowerCase());
+  }
+  if (country_id) {
+    whereClause += ' AND country_id = ?';
+    params.push(country_id.toUpperCase());
+  }
+  if (min_age) {
+    whereClause += ' AND age >= ?';
+    params.push(parseInt(min_age));
+  }
+  if (max_age) {
+    whereClause += ' AND age <= ?';
+    params.push(parseInt(max_age));
+  }
+  if (min_gender_probability) {
+    whereClause += ' AND gender_probability >= ?';
+    params.push(parseFloat(min_gender_probability));
+  }
+  if (min_country_probability) {
+    whereClause += ' AND country_probability >= ?';
+    params.push(parseFloat(min_country_probability));
+  }
+
+  const validSortFields = ['age', 'created_at', 'gender_probability'];
+  const validOrders = ['asc', 'desc'];
+  sort_by = validSortFields.includes(sort_by) ? sort_by : 'created_at';
+  order = validOrders.includes(order?.toLowerCase()) ? order.toLowerCase() : 'desc';
+
+  return { whereClause, params, sort_by, order };
+}
+
+/**
+ * GET /api/profiles/export
+ * Admin only can export
+ */
+router.get('/export', requireRole('admin'), (req, res) => {
+  try {
+    if (req.query.format !== 'csv') {
+      return res.status(400).json({ status: 'error', message: 'Only csv format is supported' });
+    }
+
+    const db = getDatabase();
+    const { whereClause, params, sort_by, order } = buildProfilesQuery(req.query);
+
+    const profiles = queryAll(db, `
+      SELECT * FROM profiles 
+      WHERE ${whereClause} 
+      ORDER BY ${sort_by} ${order}
+    `, params);
+
+    const fields = ['id', 'name', 'gender', 'gender_probability', 'age', 'age_group', 'country_id', 'country_name', 'country_probability', 'created_at'];
+    const json2csvParser = new Parser({ fields });
+    const csv = json2csvParser.parse(profiles);
+
+    res.header('Content-Type', 'text/csv');
+    res.attachment(`profiles_${Date.now()}.csv`);
+    return res.status(200).send(csv);
+  } catch (err) {
+    console.error('GET /api/profiles/export error:', err);
+    return res.status(500).json({ status: 'error', message: 'Internal server error' });
+  }
+});
+
+/**
  * Core handler for GET /api/profiles
  */
 function getProfilesHandler(req, res) {
   try {
     const db = getDatabase();
-    let { 
-      gender, age_group, country_id, 
-      min_age, max_age, 
-      min_gender_probability, min_country_probability,
-      sort_by, order,
-      page = 1, limit = 10
-    } = req.query;
+    let { page = 1, limit = 10 } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
@@ -104,47 +186,12 @@ function getProfilesHandler(req, res) {
       return res.status(400).json({ status: 'error', message: 'Invalid query parameters' });
     }
 
-    let whereClause = '1=1';
-    const params = [];
-
-    if (gender) {
-      whereClause += ' AND gender = ?';
-      params.push(gender.toLowerCase());
-    }
-    if (age_group) {
-      whereClause += ' AND age_group = ?';
-      params.push(age_group.toLowerCase());
-    }
-    if (country_id) {
-      whereClause += ' AND country_id = ?';
-      params.push(country_id.toUpperCase());
-    }
-    if (min_age) {
-      whereClause += ' AND age >= ?';
-      params.push(parseInt(min_age));
-    }
-    if (max_age) {
-      whereClause += ' AND age <= ?';
-      params.push(parseInt(max_age));
-    }
-    if (min_gender_probability) {
-      whereClause += ' AND gender_probability >= ?';
-      params.push(parseFloat(min_gender_probability));
-    }
-    if (min_country_probability) {
-      whereClause += ' AND country_probability >= ?';
-      params.push(parseFloat(min_country_probability));
-    }
+    const { whereClause, params, sort_by, order } = buildProfilesQuery(req.query);
 
     // Total count
     const countRes = queryOne(db, `SELECT COUNT(*) as total FROM profiles WHERE ${whereClause}`, params);
     const total = countRes.total;
-
-    // Sorting
-    const validSortFields = ['age', 'created_at', 'gender_probability'];
-    const validOrders = ['asc', 'desc'];
-    sort_by = validSortFields.includes(sort_by) ? sort_by : 'created_at';
-    order = validOrders.includes(order?.toLowerCase()) ? order.toLowerCase() : 'desc';
+    const total_pages = Math.ceil(total / limit);
 
     // Pagination
     const offset = (page - 1) * limit;
@@ -155,11 +202,27 @@ function getProfilesHandler(req, res) {
       LIMIT ? OFFSET ?
     `, [...params, limit, offset]);
 
+    // Build Links
+    const baseUrl = req.path === '/' ? '/api/profiles' : `/api/profiles${req.path}`;
+    const buildUrl = (p) => {
+      if (p < 1 || p > total_pages) return null;
+      const urlParams = new URLSearchParams(req.query);
+      urlParams.set('page', p);
+      urlParams.set('limit', limit);
+      return `${baseUrl}?${urlParams.toString()}`;
+    };
+
     return res.status(200).json({
       status: 'success',
       page,
       limit,
       total,
+      total_pages,
+      links: {
+        self: buildUrl(page),
+        next: buildUrl(page + 1),
+        prev: buildUrl(page - 1)
+      },
       data: profiles
     });
   } catch (err) {
@@ -268,7 +331,7 @@ router.get('/:id', (req, res) => {
 /**
  * DELETE /api/profiles/:id
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requireRole('admin'), (req, res) => {
   try {
     const db = getDatabase();
     const profile = queryOne(db, 'SELECT id FROM profiles WHERE id = ?', [req.params.id]);

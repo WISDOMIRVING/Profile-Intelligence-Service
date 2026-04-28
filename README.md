@@ -1,136 +1,66 @@
-# Queryable Intelligence Engine (Profile Service)
+# Insighta Labs+ (Backend)
 
-Upgrade your demographic intelligence system into a production-ready Queryable Intelligence Engine. This service collects, seeds, and exposes deep search capabilities for over 2,000 user profiles.
+Insighta Labs+ is a secure, multi-interface platform for demographic intelligence. It upgrades the Profile Intelligence System into a production-ready application with full Authentication, Role-Based Access Control, and a unified backend for both a Web Portal and a CLI tool.
 
-## Features
+## System Architecture
 
-- **Advanced Filtering** — Combine gender, age, country, and probability scores in a single query.
-- **Natural Language Query (NLQ)** — Search using plain English like *"young males from nigeria"*.
-- **Data Seeding** — Automatically populates 2,026 records from an external source.
-- **Sorting & Pagination** — Efficiently handle large datasets with custom page limits and sorting.
-- **UUID v7 IDs** — Time-ordered unique identifiers for optimal database indexing.
-- **CORS Enabled** — Ready for integration with any frontend application.
+The system consists of three separate repositories sharing a single source of truth:
+1. **Backend (This Repository)**: A Node.js/Express service that handles database operations, external API enrichment, OAuth authentication, and rate-limiting. It exposes a unified API for all interfaces.
+2. **CLI Application**: A global terminal tool for engineers. Communicates with the Backend using Bearer tokens and PKCE OAuth.
+3. **Web Portal**: An intuitive UI for analysts. Communicates with the Backend using secure HTTP-only cookies and CSRF protection.
 
-## Tech Stack
+The database is an in-memory SQLite database (`sql.js`) that persists to disk (`profiles.db`). 
 
-| Component | Technology |
-|-----------|-----------|
-| Runtime | Node.js |
-| Framework | Express.js |
-| Database | SQLite (via sql.js) |
-| IDs | UUID v7 |
-| API Integration | Axios (for seeding & enrichment) |
+## Authentication Flow
 
-## Getting Started
+We implemented a robust GitHub OAuth flow supporting both CLI and Web clients:
+1. **Web Portal**: Users visit `/auth/github` which redirects to GitHub. After granting permission, GitHub redirects to `/auth/github/callback`. The backend retrieves the user profile, creates/updates the user record, and issues Access (3m) and Refresh (5m) tokens as **HTTP-only cookies**. The browser is then redirected to the web dashboard.
+2. **CLI Tool**: The CLI initiates a PKCE flow and opens the browser. After the local server captures the GitHub callback, the CLI sends the `code` and `code_verifier` directly to the backend's `/auth/github/callback` endpoint. The backend exchanges these credentials and responds with JSON containing the tokens, which the CLI stores locally.
 
-### Installation
+## Token Handling Approach
+
+Tokens are handled using JSON Web Tokens (JWT) and a rotating refresh token strategy:
+- **Access Tokens**: Short-lived (3 minutes) JWTs signed with a secure secret. They contain the `userId` and are used to quickly authenticate requests.
+- **Refresh Tokens**: Opaque, securely generated 40-byte hex strings stored in the database, valid for 5 minutes.
+- **Rotation**: Calling `POST /auth/refresh` immediately invalidates the old refresh token, deletes it from the database, and issues a completely new Access + Refresh token pair.
+- **Delivery**: The backend seamlessly supports receiving tokens either via the `Authorization: Bearer <token>` header (for the CLI) or via `access_token` cookies (for the Web Portal).
+
+## Role Enforcement Logic
+
+Access control is enforced globally using a centralized middleware approach. The database includes a `role` field (`admin` or `analyst`):
+- **All API routes** under `/api/*` require authentication. The `authenticate` middleware decodes the token, checks the database to ensure the user exists and is active (`is_active = 1`), and attaches `req.user`.
+- **Admin Endpoints**: Modifying state (like `POST /api/profiles` and `DELETE /api/profiles/:id`) uses the `requireRole('admin')` middleware, which rejects the request with `403 Forbidden` if the user is not an admin.
+- **Analyst Endpoints**: Read operations (like `GET /api/profiles`) default to allowing `analyst` and `admin` roles, provided the user is authenticated.
+
+## Natural Language Parsing Approach
+
+The `GET /api/profiles/search?q=...` endpoint uses a rule-based Natural Language Query (NLQ) parser that interprets plain English into structured database filters:
+- **Age Mapping**: Detects keywords like "young" (16-24), "teenagers", "adult", "senior", or explicit constraints like "above 30" (translates to `min_age=30`).
+- **Gender Mapping**: Detects "males" or "females".
+- **Geospatial Mapping**: Matches country names (e.g., "nigeria", "kenya") and maps them to their respective ISO country IDs (`country_id = NG`).
+The parsed filters are passed directly to the core pagination and filtering engine, returning structured results identically to the standard list endpoint.
+
+## CLI Usage (Reference)
+
+*(Note: The actual CLI is maintained in a separate repository, but relies on these backend endpoints)*
+- `insighta login`: Initiates the PKCE OAuth flow.
+- `insighta profiles list --country NG --age-group adult`: Uses advanced filtering.
+- `insighta profiles search "young males from nigeria"`: Utilizes the NLQ parser.
+- `insighta profiles export --format csv`: Downloads a CSV matching the query.
+
+## API Additions (Stage 3)
+
+- **API Versioning**: Every request to `/api/profiles*` MUST include the header `X-API-Version: 1`.
+- **CSV Export**: `GET /api/profiles/export?format=csv` downloads a standardized CSV file.
+- **Rate Limiting**: `/auth/*` limited to 10 requests/minute. `/api/*` limited to 60 requests/minute per user.
+- **Structured Pagination**: Output now includes `total_pages` and `links` to `self`, `next`, and `prev`.
+
+## Setup
 
 ```bash
-git clone https://github.com/WISDOMIRVING/Profile-Intelligence-Service.git
-cd Profile-Intelligence-Service
 npm install
-```
-
-### Run Locally
-
-```bash
 npm run dev
 ```
 
-The database will automatically seed with 2,026 profiles on first start.
-
-## API Endpoints
-
-### 1. Advanced Profile List
-Returns a paginated list of profiles with optional filters and sorting.
-
-```
-GET /api/profiles?gender=male&country_id=NG&min_age=25&sort_by=age&order=desc
-```
-
-**Parameters:**
-- `gender`: male | female
-- `age_group`: child | teenager | adult | senior
-- `country_id`: ISO code (e.g., NG)
-- `min_age` / `max_age`: Numeric range
-- `min_gender_probability` / `min_country_probability`: Confidence thresholds
-- `sort_by`: age | created_at | gender_probability
-- `order`: asc | desc
-- `page` (default 1), `limit` (default 10, max 50)
-
-### 2. Natural Language Search
-Interpret plain English queries into structured filters.
-
-```
-GET /api/profiles/search?q=young males from nigeria
-```
-
-**Supported Patterns:**
-- `"young"` (maps to ages 16–24)
-- `"males"` / `"females"`
-- `"above 30"` (min_age=30)
-- `"teenagers"` / `"adult"` / `"senior"`
-- `"from [country]"` (detects major country names)
-
-### 3. Create Profile (Idempotent)
-Enriches a name using demographic APIs.
-
-```
-POST /api/profiles
-{ "name": "ella" }
-```
-
-### 4. Delete Profile
-```
-DELETE /api/profiles/:id
-```
-
-## Response Formats
-
-### Success Response
-```json
-{
-  "status": "success",
-  "page": 1,
-  "limit": 10,
-  "total": 2026,
-  "data": [
-    {
-      "id": "019...",
-      "name": "ella",
-      "gender": "female",
-      "gender_probability": 0.99,
-      "age": 46,
-      "age_group": "adult",
-      "country_id": "CD",
-      "country_name": "Congo",
-      "country_probability": 0.85,
-      "created_at": "2026-04-21T12:00:00Z"
-    }
-  ]
-}
-```
-
-### Error Response
-```json
-{
-  "status": "error",
-  "message": "Invalid query parameters"
-}
-```
-
-## Project Structure
-
-```
-├── index.js                 # App entry point
-├── db.js                    # DB schema & automated seeding
-├── routes/
-│   └── profiles.js          # Advanced Filtering & NLQ Logic
-├── services/
-│   └── enrichment.js        # Demographic classification
-├── middleware/
-│   └── validation.js        # Input validation
-```
-
-## License
-MIT
+The database will seed 2,026 profiles on the first run.
+Ensure you have an `.env` file configured with `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `JWT_SECRET`.
