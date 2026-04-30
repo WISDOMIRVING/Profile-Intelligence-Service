@@ -31,6 +31,7 @@ const apiLimiter = rateLimit({
   keyGenerator: (req) => {
     return req.user ? req.user.id : req.ip;
   },
+  validate: false,
   message: { status: 'error', message: 'Too many requests' }
 });
 
