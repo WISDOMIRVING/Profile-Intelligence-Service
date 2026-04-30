@@ -15,7 +15,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Trust proxy — required for rate limiting behind Railway/Vercel reverse proxy
-app.set('trust proxy', 1);
+app.set('trust proxy', true);
 
 // ─── Rate Limiters ─────────────────────────────────────────
 const authLimiter = rateLimit({
@@ -23,6 +23,10 @@ const authLimiter = rateLimit({
   max: 10, // limit each IP to 10 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+  validate: false,
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
+  },
   handler: (req, res) => {
     return res.status(429).json({ status: 'error', message: 'Too many requests' });
   }

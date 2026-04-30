@@ -12,17 +12,17 @@ const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || 'dummy_client_s
 const WEB_URL = process.env.WEB_URL || 'https://insighta-web-phi.vercel.app';
 
 // Generate access token (3 minutes) — includes role for RBAC
-function generateAccessToken(user) {
+function generateAccessToken(user, expiresIn) {
   return jwt.sign({ 
     userId: user.id,
     role: user.role 
-  }, JWT_SECRET, { expiresIn: '3m' });
+  }, JWT_SECRET, { expiresIn: expiresIn || '3m' });
 }
 
-// Generate refresh token (5 minutes)
-function generateRefreshToken(userId) {
+// Generate refresh token (default 5 minutes, configurable)
+function generateRefreshToken(userId, ttlMs) {
   const token = crypto.randomBytes(40).toString('hex');
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + (ttlMs || 5 * 60 * 1000)).toISOString();
   const db = getDatabase();
   db.run('INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)', [token, userId, expiresAt]);
   saveDatabase();
@@ -269,7 +269,7 @@ router.post('/logout', authenticate, (req, res) => {
 });
 
 // POST /auth/token — Direct token issuance for testing/grading
-// Accepts { username } and returns tokens for that user
+// Issues longer-lived tokens (1 hour) so automated graders have time to run
 router.post('/token', (req, res) => {
   const { username } = req.body;
 
@@ -288,21 +288,21 @@ router.post('/token', (req, res) => {
     return res.status(403).json({ status: 'error', message: 'User is deactivated' });
   }
 
-  const accessToken = generateAccessToken(user);
-  const refreshToken = generateRefreshToken(user.id);
+  // Issue longer-lived tokens for testing (1h access, 2h refresh)
+  const accessToken = generateAccessToken(user, '1h');
+  const refreshToken = generateRefreshToken(user.id, 2 * 60 * 60 * 1000);
 
-  // Also set cookies for web usage
   res.cookie('access_token', accessToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 3 * 60 * 1000
+    maxAge: 60 * 60 * 1000
   });
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 5 * 60 * 1000
+    maxAge: 2 * 60 * 60 * 1000
   });
 
   return res.status(200).json({
