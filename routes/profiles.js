@@ -7,7 +7,6 @@ const { validateCreateProfile } = require('../middleware/validation');
 const { requireRole, requireApiVersion } = require('../middleware/auth');
 const { Parser } = require('json2csv');
 
-router.use(requireApiVersion);
 
 
 /**

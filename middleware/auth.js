@@ -55,13 +55,13 @@ function authenticate(req, res, next) {
   }
 }
 
-function requireRole(role) {
+function requireRole(...allowedRoles) {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ status: 'error', message: 'Authentication required' });
     }
-    if (req.user.role !== role && req.user.role !== 'admin') {
-      return res.status(403).json({ status: 'error', message: `Requires ${role} role` });
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ status: 'error', message: 'Forbidden' });
     }
     next();
   };
