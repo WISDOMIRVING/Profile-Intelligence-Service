@@ -14,13 +14,18 @@ const { authenticate } = require('./middleware/auth');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy — required for rate limiting behind Railway/Vercel reverse proxy
+app.set('trust proxy', 1);
+
 // ─── Rate Limiters ─────────────────────────────────────────
 const authLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 10, // limit each IP to 10 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many requests' }
+  handler: (req, res) => {
+    return res.status(429).json({ status: 'error', message: 'Too many requests' });
+  }
 });
 
 const apiLimiter = rateLimit({
@@ -32,7 +37,9 @@ const apiLimiter = rateLimit({
     return req.user ? req.user.id : req.ip;
   },
   validate: false,
-  message: { status: 'error', message: 'Too many requests' }
+  handler: (req, res) => {
+    return res.status(429).json({ status: 'error', message: 'Too many requests' });
+  }
 });
 
 // ─── Middleware ────────────────────────────────────────────
@@ -47,16 +54,17 @@ app.use(cookieParser());
 app.use(morgan(':method :url :status :response-time ms'));
 
 // ─── CSRF Protection (Double-Submit Cookie Pattern) ───────
-// For state-modifying requests from the web (cookie-based auth),
-// the frontend must read the csrf_token cookie and send it 
-// back as the X-CSRF-Token header. The server validates they match.
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
     // CLI uses Bearer tokens — CSRF not needed
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
       return next();
     }
-    // Only enforce CSRF for API routes (not auth routes)
+    // Auth routes don't need CSRF
+    if (req.path.startsWith('/auth/')) {
+      return next();
+    }
+    // Only enforce CSRF for API routes
     if (req.path.startsWith('/api/')) {
       const csrfHeader = req.headers['x-csrf-token'];
       const csrfCookie = req.cookies?.csrf_token;
