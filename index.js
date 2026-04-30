@@ -1,10 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const crypto = require('crypto');
 const { initializeDatabase } = require('./db');
 const profileRoutes = require('./routes/profiles');
-
 const cookieParser = require('cookie-parser');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
@@ -17,34 +15,36 @@ const PORT = process.env.PORT || 3000;
 // Trust proxy — required for rate limiting behind Railway reverse proxy
 app.set('trust proxy', true);
 
+// ─── Logging ───────────────────────────────────────────────
+// Format: Method, Endpoint, Status code, Response time (ms)
+app.use(morgan(':method :url :status :res[content-length] - :response-time ms'));
+
 // ─── Rate Limiters ─────────────────────────────────────────
-// Auth rate limiter — ONLY for /auth/github to prevent brute-force
-const authGithubLimiter = rateLimit({
+const authLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
+  message: { status: 'error', message: 'Too many requests' },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: false,
-  handler: (req, res) => {
-    return res.status(429).json({ status: 'error', message: 'Too many requests' });
-  }
 });
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  message: { status: 'error', message: 'Too many requests' },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: false,
   keyGenerator: (req) => {
+    // Limit per user if authenticated, else per IP
     return req.user ? req.user.id : req.ip;
-  },
-  handler: (req, res) => {
-    return res.status(429).json({ status: 'error', message: 'Too many requests' });
   }
 });
 
-// ─── Middleware ────────────────────────────────────────────
+// Apply limits
+app.use('/auth', authLimiter);
+app.use('/api', apiLimiter);
+
+// ─── Global Middleware ──────────────────────────────────────
 app.use(cors({
   origin: process.env.WEB_URL || 'https://insighta-web-phi.vercel.app',
   credentials: true
@@ -52,96 +52,52 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
-// Custom Morgan Logging Format (Method, Endpoint, Status code, Response time)
-app.use(morgan(':method :url :status :response-time ms'));
-
-// ─── CSRF Protection (Double-Submit Cookie Pattern) ───────
+// ─── CSRF Protection ────────────────────────────────────────
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
-    // CLI uses Bearer tokens — CSRF not needed
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
       return next();
     }
-    // Auth routes don't need CSRF
-    if (req.path.startsWith('/auth/')) {
-      return next();
-    }
-    // Only enforce CSRF for API routes
-    if (req.path.startsWith('/api/')) {
-      const csrfHeader = req.headers['x-csrf-token'];
-      const csrfCookie = req.cookies?.csrf_token;
-      if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
-        return res.status(403).json({ status: 'error', message: 'CSRF token missing or invalid' });
-      }
+    const cookieToken = req.cookies.csrf_token;
+    const headerToken = req.headers['x-csrf-token'];
+    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+      return res.status(403).json({ status: 'error', message: 'CSRF token mismatch' });
     }
   }
   next();
 });
 
-// ─── API Versioning Middleware ─────────────────────────────
-app.use('/api', (req, res, next) => {
+// ─── Routes ────────────────────────────────────────────────
+app.use('/auth', authRoutes);
+
+app.use('/api', authenticate, (req, res, next) => {
   const version = req.headers['x-api-version'];
   if (version !== '1') {
     return res.status(400).json({ status: 'error', message: 'API version header required' });
   }
   next();
-});
+}, profileRoutes);
 
-// ─── Routes ───────────────────────────────────────────────
-// Rate limit ONLY /auth/github (GET and callback)
-// This prevents /auth/refresh and /auth/token from being blocked
-// when the grader tests rate limiting by hammering /auth/github
-app.get('/auth/github', authGithubLimiter);
-app.get('/auth/github/callback', authGithubLimiter);
-
-// Mount auth routes (refresh, logout, token are NOT rate limited)
-app.use('/auth', authRoutes);
-
-// Protect ALL /api/* routes
-app.use('/api/', authenticate, apiLimiter);
-
-// User Management — includes ALL required fields from users table
-app.get('/api/users/me', (req, res) => {
-  res.json({ 
-    status: 'success', 
-    data: {
-      id: req.user.id,
-      github_id: req.user.github_id,
-      username: req.user.username,
-      email: req.user.email,
-      avatar_url: req.user.avatar_url,
-      role: req.user.role,
-      is_active: req.user.is_active,
-      last_login_at: req.user.last_login_at,
-      created_at: req.user.created_at
-    }
+// User Identity endpoint
+app.get('/api/users/me', authenticate, (req, res) => {
+  res.json({
+    status: 'success',
+    data: req.user
   });
 });
 
-app.use('/api/profiles', profileRoutes);
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// ─── 404 catch-all ────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ status: 'error', message: 'Route not found' });
-});
-
-// ─── Global error handler ─────────────────────────────────
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ status: 'error', message: 'Internal server error' });
-});
-
-// ─── Initialize DB then start server ──────────────────────
+// ─── Startup ───────────────────────────────────────────────
 async function start() {
-  try {
-    await initializeDatabase();
-    app.listen(PORT, () => {
-      console.log(`✅ Profile Intelligence Service running on port ${PORT}`);
-    });
-  } catch (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  }
+  await initializeDatabase();
+  app.listen(PORT, () => {
+    console.log(`Backend running on port ${PORT}`);
+  });
 }
 
-start();
+start().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
