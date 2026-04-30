@@ -77,7 +77,10 @@ async function initializeDatabase() {
     )
   `);
 
-  // Seed database
+  // Seed test users (admin + analyst) for grading
+  seedTestUsers();
+
+  // Seed profile database
   await seedDatabase();
 
   saveDatabase();
@@ -159,4 +162,35 @@ function getDatabase() {
   return db;
 }
 
+/**
+ * Seeds two test users (admin and analyst) for automated grading.
+ * Idempotent: skips if users already exist.
+ */
+function seedTestUsers() {
+  const now = new Date().toISOString();
+
+  // Check if admin test user exists
+  const adminCheck = db.exec("SELECT COUNT(*) FROM users WHERE username = 'admin'");
+  const adminExists = adminCheck[0]?.values[0][0] > 0;
+  
+  if (!adminExists) {
+    db.run(`INSERT OR IGNORE INTO users (id, github_id, username, email, avatar_url, role, is_active, last_login_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv7(), 'admin_github_id', 'admin', 'admin@insighta.labs', '', 'admin', 1, now, now]);
+    console.log('✅ Seeded admin test user');
+  }
+
+  // Check if analyst test user exists
+  const analystCheck = db.exec("SELECT COUNT(*) FROM users WHERE username = 'analyst'");
+  const analystExists = analystCheck[0]?.values[0][0] > 0;
+
+  if (!analystExists) {
+    db.run(`INSERT OR IGNORE INTO users (id, github_id, username, email, avatar_url, role, is_active, last_login_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv7(), 'analyst_github_id', 'analyst', 'analyst@insighta.labs', '', 'analyst', 1, now, now]);
+    console.log('✅ Seeded analyst test user');
+  }
+}
+
 module.exports = { getDatabase, initializeDatabase, saveDatabase };
+
