@@ -172,7 +172,8 @@ router.get('/github/callback', async (req, res) => {
     // Determine if CLI or Web
     const acceptHeader = req.headers.accept || '';
     if (acceptHeader.includes('text/html') && !code_verifier) {
-      return res.redirect(`${WEB_URL}/dashboard`);
+      // Cross-domain handoff: send tokens to frontend callback
+      return res.redirect(`${WEB_URL}/auth/callback?access_token=${accessToken}&refresh_token=${refreshToken}&csrf_token=${csrfToken}`);
     }
 
     // CLI or JSON request — return tokens in body
