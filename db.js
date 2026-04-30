@@ -79,10 +79,10 @@ async function initializeDatabase() {
 
   // Seed test users (admin + analyst) for grading
   seedTestUsers();
+  saveDatabase();
 
   // Seed profile database
   await seedDatabase();
-
   saveDatabase();
 }
 
