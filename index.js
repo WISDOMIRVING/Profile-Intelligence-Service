@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 const { initializeDatabase } = require('./db');
 const profileRoutes = require('./routes/profiles');
 
@@ -17,18 +18,20 @@ const PORT = process.env.PORT || 3000;
 const authLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 10, // limit each IP to 10 requests per windowMs
-  message: { status: 'error', message: 'Too many requests' },
-  validate: false
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: 'error', message: 'Too many requests' }
 });
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 60, // limit each IP to 60 requests per windowMs
+  max: 60, // 60 requests per windowMs per user
+  standardHeaders: true,
+  legacyHeaders: false,
   keyGenerator: (req) => {
     return req.user ? req.user.id : req.ip;
   },
-  message: { status: 'error', message: 'Too many requests' },
-  validate: false
+  message: { status: 'error', message: 'Too many requests' }
 });
 
 // ─── Middleware ────────────────────────────────────────────
@@ -39,33 +42,36 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
-// API Versioning Middleware
-app.use('/api', (req, res, next) => {
-  const version = req.headers['x-api-version'];
-  if (version !== '1') {
-    return res.status(400).json({ status: 'error', message: 'Invalid or missing X-API-Version header. Expected version: 1' });
+// Custom Morgan Logging Format (Method, Endpoint, Status code, Response time)
+app.use(morgan(':method :url :status :response-time ms'));
+
+// ─── CSRF Protection (Double-Submit Cookie Pattern) ───────
+// For state-modifying requests from the web (cookie-based auth),
+// the frontend must read the csrf_token cookie and send it 
+// back as the X-CSRF-Token header. The server validates they match.
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    // CLI uses Bearer tokens — CSRF not needed
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      return next();
+    }
+    // Only enforce CSRF for API routes (not auth routes)
+    if (req.path.startsWith('/api/')) {
+      const csrfHeader = req.headers['x-csrf-token'];
+      const csrfCookie = req.cookies?.csrf_token;
+      if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
+        return res.status(403).json({ status: 'error', message: 'CSRF token missing or invalid' });
+      }
+    }
   }
   next();
 });
 
-// Custom Morgan Logging Format (Method, Endpoint, Status code, Response time)
-app.use(morgan(':method :url :status :response-time ms'));
-
-// Simple CSRF Protection for state modifying API routes using cookies
-// The frontend must send X-CSRF-Token if it authenticates via cookies
-app.use((req, res, next) => {
-  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
-    // If authenticated via Bearer token (CLI), CSRF is not needed
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      return next();
-    }
-    // Only enforce CSRF for non-auth API routes
-    if (req.path.startsWith('/api/')) {
-      const csrfToken = req.headers['x-csrf-token'];
-      if (!csrfToken) {
-        return res.status(403).json({ status: 'error', message: 'CSRF token missing' });
-      }
-    }
+// ─── API Versioning Middleware ─────────────────────────────
+app.use('/api', (req, res, next) => {
+  const version = req.headers['x-api-version'];
+  if (version !== '1') {
+    return res.status(400).json({ status: 'error', message: 'API version header required' });
   }
   next();
 });
@@ -78,7 +84,19 @@ app.use('/api/', authenticate, apiLimiter);
 
 // User Management
 app.get('/api/users/me', (req, res) => {
-  res.json({ status: 'success', data: req.user });
+  res.json({ 
+    status: 'success', 
+    data: {
+      id: req.user.id,
+      username: req.user.username,
+      email: req.user.email,
+      avatar_url: req.user.avatar_url,
+      role: req.user.role,
+      is_active: req.user.is_active,
+      last_login_at: req.user.last_login_at,
+      created_at: req.user.created_at
+    }
+  });
 });
 
 app.use('/api/profiles', profileRoutes);
