@@ -164,31 +164,42 @@ function getDatabase() {
 
 /**
  * Seeds two test users (admin and analyst) for automated grading.
- * Idempotent: skips if users already exist.
+ * Idempotent: creates if missing, updates if fields are blank.
  */
 function seedTestUsers() {
   const now = new Date().toISOString();
 
-  // Check if admin test user exists
-  const adminCheck = db.exec("SELECT COUNT(*) FROM users WHERE username = 'admin'");
-  const adminExists = adminCheck[0]?.values[0][0] > 0;
-  
-  if (!adminExists) {
-    db.run(`INSERT OR IGNORE INTO users (id, github_id, username, email, avatar_url, role, is_active, last_login_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [uuidv7(), 'admin_github_id', 'admin', 'admin@insighta.labs', '', 'admin', 1, now, now]);
-    console.log('✅ Seeded admin test user');
-  }
+  const testUsers = [
+    {
+      github_id: '100000001',
+      username: 'admin',
+      email: 'admin@insighta.labs',
+      avatar_url: 'https://avatars.githubusercontent.com/u/100000001',
+      role: 'admin'
+    },
+    {
+      github_id: '100000002',
+      username: 'analyst',
+      email: 'analyst@insighta.labs',
+      avatar_url: 'https://avatars.githubusercontent.com/u/100000002',
+      role: 'analyst'
+    }
+  ];
 
-  // Check if analyst test user exists
-  const analystCheck = db.exec("SELECT COUNT(*) FROM users WHERE username = 'analyst'");
-  const analystExists = analystCheck[0]?.values[0][0] > 0;
+  for (const tu of testUsers) {
+    const check = db.exec(`SELECT COUNT(*) FROM users WHERE username = '${tu.username}'`);
+    const exists = check[0]?.values[0][0] > 0;
 
-  if (!analystExists) {
-    db.run(`INSERT OR IGNORE INTO users (id, github_id, username, email, avatar_url, role, is_active, last_login_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [uuidv7(), 'analyst_github_id', 'analyst', 'analyst@insighta.labs', '', 'analyst', 1, now, now]);
-    console.log('✅ Seeded analyst test user');
+    if (!exists) {
+      db.run(`INSERT INTO users (id, github_id, username, email, avatar_url, role, is_active, last_login_at, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuidv7(), tu.github_id, tu.username, tu.email, tu.avatar_url, tu.role, 1, now, now]);
+      console.log(`✅ Seeded ${tu.role} test user: @${tu.username}`);
+    } else {
+      // Force update fields that might be blank from a previous seeding
+      db.run(`UPDATE users SET github_id = ?, email = ?, avatar_url = ? WHERE username = ? AND (github_id = '' OR github_id = 'admin_github_id' OR github_id = 'analyst_github_id' OR email = '' OR avatar_url = '')`,
+        [tu.github_id, tu.email, tu.avatar_url, tu.username]);
+    }
   }
 }
 
