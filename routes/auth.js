@@ -289,21 +289,21 @@ router.post('/token', (req, res) => {
     return res.status(403).json({ status: 'error', message: 'User is deactivated' });
   }
 
-  // Issue longer-lived tokens for testing (1h access, 2h refresh)
-  const accessToken = generateAccessToken(user, '1h');
-  const refreshToken = generateRefreshToken(user.id, 2 * 60 * 60 * 1000);
+  // Issue strict tokens (3m access, 5m refresh)
+  const accessToken = generateAccessToken(user, '3m');
+  const refreshToken = generateRefreshToken(user.id, 5 * 60 * 1000);
 
   res.cookie('access_token', accessToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 60 * 60 * 1000
+    maxAge: 3 * 60 * 1000
   });
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 2 * 60 * 60 * 1000
+    maxAge: 5 * 60 * 1000
   });
 
   return res.status(200).json({
