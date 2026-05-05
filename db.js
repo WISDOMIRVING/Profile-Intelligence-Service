@@ -54,6 +54,13 @@ async function initializeDatabase() {
     )
   `);
 
+  // Optimization: Add indexes for frequently filtered columns
+  db.run('CREATE INDEX IF NOT EXISTS idx_profiles_gender ON profiles(gender)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_profiles_age ON profiles(age)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_profiles_country_id ON profiles(country_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_profiles_age_group ON profiles(age_group)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_profiles_name ON profiles(name)');
+
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,

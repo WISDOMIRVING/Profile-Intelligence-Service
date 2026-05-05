@@ -6,6 +6,13 @@ const { enrichProfile } = require('../services/enrichment');
 const { validateCreateProfile } = require('../middleware/validation');
 const { requireRole, requireApiVersion } = require('../middleware/auth');
 const { Parser } = require('json2csv');
+const multer = require('multer');
+const { parse } = require('csv-parse');
+const NodeCache = require('node-cache');
+const fs = require('fs');
+
+const queryCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const upload = multer({ dest: 'uploads/' });
 
 
 
@@ -135,7 +142,25 @@ function buildProfilesQuery(queryOptions) {
   sort_by = validSortFields.includes(sort_by) ? sort_by : 'created_at';
   order = validOrders.includes(order?.toLowerCase()) ? order.toLowerCase() : 'desc';
 
-  return { whereClause, params, sort_by, order };
+  return { whereClause, params, sort_by, order, options: queryOptions };
+}
+
+/**
+ * Helper: Normalizes query options to a canonical form for caching
+ */
+function getCanonicalKey(options) {
+  const normalized = {};
+  const keys = Object.keys(options).sort();
+  
+  for (const key of keys) {
+    let val = options[key];
+    if (typeof val === 'string') val = val.toLowerCase().trim();
+    if (['page', 'limit', 'min_age', 'max_age'].includes(key)) val = parseInt(val);
+    if (['min_gender_probability', 'min_country_probability'].includes(key)) val = parseFloat(val);
+    normalized[key] = val;
+  }
+  
+  return JSON.stringify(normalized);
 }
 
 /**
@@ -176,6 +201,14 @@ router.get('/export', requireRole('admin'), (req, res) => {
 function getProfilesHandler(req, res) {
   try {
     const db = getDatabase();
+    
+    // Normalization & Caching
+    const canonicalKey = getCanonicalKey(req.query);
+    const cached = queryCache.get(canonicalKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     let { page = 1, limit = 10 } = req.query;
 
     page = parseInt(page);
@@ -211,7 +244,7 @@ function getProfilesHandler(req, res) {
       return `${baseUrl}?${urlParams.toString()}`;
     };
 
-    return res.status(200).json({
+    const responseData = {
       status: 'success',
       page,
       limit,
@@ -223,7 +256,12 @@ function getProfilesHandler(req, res) {
         prev: buildUrl(page - 1)
       },
       data: profiles
-    });
+    };
+
+    // Store in cache
+    queryCache.set(canonicalKey, responseData);
+
+    return res.status(200).json(responseData);
   } catch (err) {
     console.error('getProfilesHandler error:', err);
     return res.status(500).json({ status: 'error', message: 'Internal server error' });
@@ -343,6 +381,126 @@ router.delete('/:id', requireRole('admin'), (req, res) => {
   } catch (err) {
     console.error('DELETE /api/profiles/:id error:', err);
     return res.status(500).json({ status: 'error', message: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/profiles/upload
+ * Bulk CSV ingestion
+ */
+router.post('/upload', requireRole('admin'), upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ status: 'error', message: 'No file uploaded' });
+  }
+
+  const stats = {
+    total_rows: 0,
+    inserted: 0,
+    skipped: 0,
+    reasons: {
+      duplicate_name: 0,
+      invalid_age: 0,
+      missing_fields: 0,
+      malformed_row: 0
+    }
+  };
+
+  try {
+    const db = getDatabase();
+    const parser = fs.createReadStream(req.file.path).pipe(parse({
+      columns: true,
+      skip_empty_lines: true,
+      trim: true
+    }));
+
+    // Prepare statement for batch processing
+    const stmt = db.prepare(`
+      INSERT INTO profiles (id, name, gender, gender_probability, age, age_group, country_id, country_name, country_probability, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const nameCheckStmt = db.prepare('SELECT 1 FROM profiles WHERE name = ? COLLATE NOCASE');
+
+    for await (const row of parser) {
+      stats.total_rows++;
+
+      // 1. Validation: Missing fields
+      if (!row.name || !row.gender || row.age === undefined) {
+        stats.skipped++;
+        stats.reasons.missing_fields++;
+        continue;
+      }
+
+      // 2. Validation: Invalid age
+      const age = parseInt(row.age);
+      if (isNaN(age) || age < 0) {
+        stats.skipped++;
+        stats.reasons.invalid_age++;
+        continue;
+      }
+
+      // 3. Validation: Idempotency (Duplicate Name)
+      nameCheckStmt.bind([row.name]);
+      const exists = nameCheckStmt.step();
+      nameCheckStmt.reset();
+      if (exists) {
+        stats.skipped++;
+        stats.reasons.duplicate_name++;
+        continue;
+      }
+
+      // Calculate age group if missing
+      let ageGroup = row.age_group;
+      if (!ageGroup) {
+        if (age < 13) ageGroup = 'child';
+        else if (age < 20) ageGroup = 'teenager';
+        else if (age < 60) ageGroup = 'adult';
+        else ageGroup = 'senior';
+      }
+
+      try {
+        stmt.run([
+          row.id || uuidv7(),
+          row.name,
+          row.gender.toLowerCase(),
+          parseFloat(row.gender_probability || 1),
+          age,
+          ageGroup.toLowerCase(),
+          (row.country_id || '??').toUpperCase(),
+          row.country_name || 'Unknown',
+          parseFloat(row.country_probability || 1),
+          row.created_at || new Date().toISOString()
+        ]);
+        stats.inserted++;
+
+        // Clear cache periodically or at the end
+        if (stats.inserted % 1000 === 0) {
+          queryCache.flushAll();
+        }
+      } catch (err) {
+        stats.skipped++;
+        stats.reasons.malformed_row++;
+      }
+    }
+
+    stmt.free();
+    nameCheckStmt.free();
+    
+    // Final persistence
+    saveDatabase();
+    queryCache.flushAll();
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
+    return res.status(200).json({
+      status: 'success',
+      ...stats
+    });
+  } catch (err) {
+    console.error('CSV Ingestion Error:', err);
+    if (fs.existsSync(req.file?.path)) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ status: 'error', message: 'Failed to process CSV file' });
   }
 });
 
